@@ -538,24 +538,17 @@ class Request(object):
         no_proxy = filter(lambda x: x.strip(), self.proxies.get('no', '').split(','))
         proxy = self.proxies.get(_p.scheme)
 
+        # Check to see if keep_alive is allowed.
+        try:
+            if self.config.get('keep_alive'):
+                conn = self._poolmanager.connection_from_url(url)
+            else:
+                conn = connectionpool.connection_from_url(url)
+                self.headers['Connection'] = 'close'
+        except LocationParseError as e:
+            raise InvalidURL(e)
         if proxy and not any(map(_p.hostname.endswith, no_proxy)):
-            conn = poolmanager.proxy_from_url(proxy)
-            _proxy = urlparse(proxy)
-            if '@' in _proxy.netloc:
-                auth, url = _proxy.netloc.split('@', 1)
-                self.proxy_auth = HTTPProxyAuth(*auth.split(':', 1))
-                r = self.proxy_auth(self)
-                self.__dict__.update(r.__dict__)
-        else:
-            # Check to see if keep_alive is allowed.
-            try:
-                if self.config.get('keep_alive'):
-                    conn = self._poolmanager.connection_from_url(url)
-                else:
-                    conn = connectionpool.connection_from_url(url)
-                    self.headers['Connection'] = 'close'
-            except LocationParseError as e:
-                raise InvalidURL(e)
+            conn.proxy_url = proxy
 
         if url.startswith('https') and self.verify:
 

@@ -33,6 +33,9 @@ class PoolManager(RequestMethods):
         Number of connection pools to cache before discarding the least recently
         used pool.
 
+    :param proxy_url:
+        This proxy will be used for all connections from all pools
+
     :param \**connection_pool_kw:
         Additional parameters are used to create fresh
         :class:`urllib3.connectionpool.ConnectionPool` instances.
@@ -48,8 +51,9 @@ class PoolManager(RequestMethods):
 
     """
 
-    def __init__(self, num_pools=10, **connection_pool_kw):
+    def __init__(self, num_pools=10, proxy_url=None, **connection_pool_kw):
         self.connection_pool_kw = connection_pool_kw
+        self.proxy_url = proxy_url
         self.pools = RecentlyUsedContainer(num_pools,
                                            dispose_func=lambda p: p.close())
 
@@ -71,7 +75,12 @@ class PoolManager(RequestMethods):
         """
         port = port or port_by_scheme.get(scheme, 80)
 
-        pool_key = (scheme, host, port)
+        if self.proxy_url and scheme == parse_url(self.proxy_url).scheme == "http":
+            # Try to keep connection to HTTP proxy
+            _p = parse_url(self.proxy_url)
+            pool_key = (_p.scheme, _p.host, _p.port)
+        else:
+            pool_key = (scheme, host, port)
 
         # If the scheme, host, or port doesn't match existing open connections,
         # open a new ConnectionPool.
@@ -81,7 +90,7 @@ class PoolManager(RequestMethods):
 
         # Make a fresh ConnectionPool of the desired type
         pool_cls = pool_classes_by_scheme[scheme]
-        pool = pool_cls(host, port, **self.connection_pool_kw)
+        pool = pool_cls(host, port, proxy_url=self.proxy_url, **self.connection_pool_kw)
 
         self.pools[pool_key] = pool
 
@@ -114,7 +123,10 @@ class PoolManager(RequestMethods):
         kw['assert_same_host'] = False
         kw['redirect'] = False
 
-        response = conn.urlopen(method, u.request_uri, **kw)
+        if self.proxy_url and u.scheme == parse_url(self.proxy_url).scheme == "http":
+            response = conn.urlopen(method, url, **kw)
+        else:
+            response = conn.urlopen(method, u.request_uri, **kw)
 
         redirect_location = redirect and response.get_redirect_location()
         if not redirect_location:

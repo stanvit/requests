@@ -10,10 +10,10 @@ import socket
 from socket import timeout as SocketTimeout
 
 try: # Python 3
-    from http.client import HTTPConnection, HTTPException
+    from http.client import HTTPConnection as _HTTPConnection, HTTPException
     from http.client import HTTP_PORT, HTTPS_PORT
 except ImportError:
-    from httplib import HTTPConnection, HTTPException
+    from httplib import HTTPConnection as _HTTPConnection, HTTPException
     from httplib import HTTP_PORT, HTTPS_PORT
 
 try: # Python 3
@@ -28,9 +28,9 @@ try: # Compiled with SSL?
     ssl = None
 
     try: # Python 3
-        from http.client import HTTPSConnection
+        from http.client import HTTPSConnection as _HTTPSConnection
     except ImportError:
-        from httplib import HTTPSConnection
+        from httplib import HTTPSConnection as _HTTPSConnection
 
     import ssl
     BaseSSLError = ssl.SSLError
@@ -66,6 +66,30 @@ port_by_scheme = {
     'https': HTTPS_PORT,
 }
 
+def create_proxy_socket(self,do_tunnel=False):
+    if self.proxy_url:
+        proxy_scheme, proxy_host, proxy_port = get_host(self.proxy_url)
+        if proxy_scheme != 'http':
+            raise AssertionError('Not supported proxy scheme %s'%proxy_scheme)
+        self.sock = socket.create_connection((proxy_host, proxy_port), self.timeout)
+        if do_tunnel:
+            self._tunnel_host = self.host
+            self._tunnel_port = self.port
+            self._tunnel()
+    else:
+            self.sock = socket.create_connection((self.host, self.port), self.timeout)
+
+class HTTPConnection(_HTTPConnection):
+    create_proxy_socket = create_proxy_socket
+    def connect(self):
+        self.create_proxy_socket()
+
+class HTTPSConnection(_HTTPSConnection):
+    create_proxy_socket = create_proxy_socket
+    def connect(self):
+        self.create_proxy_socket(do_tunnel=True)
+        self.sock = ssl.wrap_socket(self.sock, self.key_file, self.cert_file)
+
 
 ## Connection objects (extension of httplib)
 
@@ -76,6 +100,7 @@ class VerifiedHTTPSConnection(HTTPSConnection):
     """
     cert_reqs = None
     ca_certs = None
+    create_proxy_socket = create_proxy_socket
 
     def set_cert(self, key_file=None, cert_file=None,
                  cert_reqs='CERT_NONE', ca_certs=None):
@@ -92,7 +117,8 @@ class VerifiedHTTPSConnection(HTTPSConnection):
 
     def connect(self):
         # Add certificate verification
-        sock = socket.create_connection((self.host, self.port), self.timeout)
+        self.create_proxy_socket(do_tunnel=True)
+        sock = self.sock
 
         # Wrap socket using verification with the root certs in
         # trusted_root_certs
@@ -168,12 +194,15 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
     :param headers:
         Headers to include with all requests, unless other headers are given
         explicitly.
+
+    :param proxy_url:
+        URL of the proxy that should be used for all requests
     """
 
     scheme = 'http'
 
     def __init__(self, host, port=None, strict=False, timeout=None, maxsize=1,
-                 block=False, headers=None):
+                 block=False, headers=None, proxy_url=None):
         super(HTTPConnectionPool, self).__init__(host, port)
 
         self.strict = strict
@@ -181,6 +210,7 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         self.pool = self.QueueCls(maxsize)
         self.block = block
         self.headers = headers or {}
+        self.proxy_url = proxy_url
 
         # Fill the queue up so that doing get() on it will block properly
         for _ in xrange(maxsize):
@@ -197,7 +227,9 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
         self.num_connections += 1
         log.info("Starting new HTTP connection (%d): %s" %
                  (self.num_connections, self.host))
-        return HTTPConnection(host=self.host, port=self.port)
+        connection = HTTPConnection(host=self.host, port=self.port)
+        connection.proxy_url = self.proxy_url
+        return connection
 
     def _get_conn(self, timeout=None):
         """
@@ -512,7 +544,8 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                  strict=False, timeout=None, maxsize=1,
                  block=False, headers=None,
                  key_file=None, cert_file=None,
-                 cert_reqs='CERT_NONE', ca_certs=None):
+                 cert_reqs='CERT_NONE', ca_certs=None,
+                 proxy_url=None):
 
         super(HTTPSConnectionPool, self).__init__(host, port,
                                                   strict, timeout, maxsize,
@@ -521,6 +554,7 @@ class HTTPSConnectionPool(HTTPConnectionPool):
         self.cert_file = cert_file
         self.cert_reqs = cert_reqs
         self.ca_certs = ca_certs
+        self.proxy_url = proxy_url
 
     def _new_conn(self):
         """
@@ -535,11 +569,14 @@ class HTTPSConnectionPool(HTTPConnectionPool):
                 raise SSLError("Can't connect to HTTPS URL because the SSL "
                                "module is not available.")
 
-            return HTTPSConnection(host=self.host, port=self.port)
+            connection = HTTPSConnection(host=self.host, port=self.port)
+            connection.proxy_url = self.proxy_url
+            return connection
 
         connection = VerifiedHTTPSConnection(host=self.host, port=self.port)
         connection.set_cert(key_file=self.key_file, cert_file=self.cert_file,
                             cert_reqs=self.cert_reqs, ca_certs=self.ca_certs)
+        connection.proxy_url = self.proxy_url
         return connection
 
 
