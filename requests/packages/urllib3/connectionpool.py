@@ -66,41 +66,42 @@ port_by_scheme = {
     'https': HTTPS_PORT,
 }
 
-def create_proxy_socket(self,do_tunnel=False):
-    if self.proxy_url:
-        proxy_scheme, proxy_host, proxy_port = get_host(self.proxy_url)
-        if proxy_scheme != 'http':
-            raise AssertionError('Not supported proxy scheme %s'%proxy_scheme)
-        self.sock = socket.create_connection((proxy_host, proxy_port), self.timeout)
-        if do_tunnel:
-            self._tunnel_host = self.host
-            self._tunnel_port = self.port
-            self._tunnel()
-    else:
-            self.sock = socket.create_connection((self.host, self.port), self.timeout)
+class BaseHTTPConnection(object):
+    do_tunnel = False
+    do_ssl = False
 
-class HTTPConnection(_HTTPConnection):
-    create_proxy_socket = create_proxy_socket
     def connect(self):
-        self.create_proxy_socket()
+        if self.proxy_url:
+            proxy_scheme, proxy_host, proxy_port = get_host(self.proxy_url)
+            if proxy_scheme != 'http':
+                raise AssertionError('Not supported proxy scheme %s'%proxy_scheme)
+            self.sock = socket.create_connection((proxy_host, proxy_port), self.timeout)
+            if self.do_tunnel:
+                self._tunnel_host = self.host
+                self._tunnel_port = self.port
+                self._tunnel()
+        else:
+                self.sock = socket.create_connection((self.host, self.port), self.timeout)
+        if self.do_ssl:
+            self.sock = ssl.wrap_socket(self.sock, self.key_file, self.cert_file)
 
-class HTTPSConnection(_HTTPSConnection):
-    create_proxy_socket = create_proxy_socket
-    def connect(self):
-        self.create_proxy_socket(do_tunnel=True)
-        self.sock = ssl.wrap_socket(self.sock, self.key_file, self.cert_file)
+class HTTPConnection(BaseHTTPConnection,_HTTPConnection,object):
+    pass
 
+class HTTPSConnection(BaseHTTPConnection,_HTTPSConnection,object):
+    do_tunnel = True
+    do_ssl = True
 
 ## Connection objects (extension of httplib)
 
-class VerifiedHTTPSConnection(HTTPSConnection):
+class VerifiedHTTPSConnection(BaseHTTPConnection,_HTTPSConnection,object):
     """
     Based on httplib.HTTPSConnection but wraps the socket with
     SSL certification.
     """
     cert_reqs = None
     ca_certs = None
-    create_proxy_socket = create_proxy_socket
+    do_tunnel = True
 
     def set_cert(self, key_file=None, cert_file=None,
                  cert_reqs='CERT_NONE', ca_certs=None):
@@ -117,7 +118,7 @@ class VerifiedHTTPSConnection(HTTPSConnection):
 
     def connect(self):
         # Add certificate verification
-        self.create_proxy_socket(do_tunnel=True)
+        super(VerifiedHTTPSConnection,self).connect()
         sock = self.sock
 
         # Wrap socket using verification with the root certs in
