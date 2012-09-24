@@ -304,6 +304,13 @@ class HTTPConnectionPool(ConnectionPool, RequestMethods):
             timeout = self.timeout
 
         conn.timeout = timeout # This only does anything in Py26+
+        # Fixing the bug http://bugs.python.org/issue14721
+        # It's already fixed in Python 2.7.4 but hasn't made to major distros
+        if method in ('PUT', 'POST') and not httplib_request_kw.get('body'):
+            _hdrs= httplib_request_kw.get('headers',{})
+            if 'content-length' not in [k.lower() for k in _hdrs]:
+                _hdrs['Content-Length'] = 0
+                httplib_request_kw['headers'] = _hdrs
         conn.request(method, url, **httplib_request_kw)
 
         # Set timeout
