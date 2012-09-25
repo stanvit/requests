@@ -74,9 +74,13 @@ class BaseHTTPConnection(object):
         if self.proxy_url:
             proxy_scheme, proxy_host, proxy_port = get_host(self.proxy_url)
             if proxy_scheme != 'http':
+                log.error("Wrong proxy scheme: %s"%proxy_scheme)
                 raise AssertionError('Not supported proxy scheme %s'%proxy_scheme)
+            log.debug("Establishing connection to the proxy %s:%s"%(proxy_host,
+                proxy_port))
             self.sock = socket.create_connection((proxy_host, proxy_port), self.timeout)
             if self.do_tunnel:
+                log.debug("Creating tunnel to %s:%s"%(self.host,self.port))
                 self._tunnel_host = self.host
                 self._tunnel_port = self.port
                 self._tunnel()
