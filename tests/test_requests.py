@@ -25,6 +25,13 @@ if 'HTTPBIN_URL' not in os.environ:
 
 HTTPBIN_URL = os.environ.get('HTTPBIN_URL')
 
+def skip_if_proxied(wrapped,proto='http'):
+    def f(*args, **kwargs):
+        if os.getenv('%s_proxy'%proto,os.getenv('%s_PROXY',None)):
+            return
+        return wrapped(*args,**kwargs)
+    return f
+
 
 def httpbin(*suffix):
     """Returns url for HTTPBIN resource."""
@@ -854,6 +861,7 @@ class RequestsTestSuite(TestSetup, TestBaseMixin, unittest.TestCase):
         assert ds1.prefetch
         assert not ds2.prefetch
 
+    @skip_if_proxied
     def test_connection_error(self):
         try:
             get('http://localhost:1/nope')
@@ -862,6 +870,7 @@ class RequestsTestSuite(TestSetup, TestBaseMixin, unittest.TestCase):
         else:
             assert False
 
+    @skip_if_proxied
     def test_connection_error_with_safe_mode(self):
         config = {'safe_mode': True}
         r = get('http://localhost:1/nope', allow_redirects=False, config=config)
@@ -1123,4 +1132,12 @@ class RequestsTestSuite(TestSetup, TestBaseMixin, unittest.TestCase):
         self.assertTrue(vals.get('key2') is None)
 
 if __name__ == '__main__':
+    if os.getenv('http_proxy',os.getenv('HTTP_PROXY',None)):
+        print "Use proxy from environment"
+        t = unittest.main(exit=False)
+        if t.result.errors:
+            sys.exit(1)
+        os.environ.pop('http_proxy',None)
+        os.environ.pop('HTTP_PROXY',None)
+        print "Without proxy"
     unittest.main()

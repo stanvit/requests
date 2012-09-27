@@ -29,4 +29,13 @@ class HTTPSTest(unittest.TestCase):
 
 
 if __name__ == '__main__':
+    failed = False
+    if os.getenv('https_proxy',os.getenv('HTTPS_PROXY',None)):
+        print "Use proxy from environment"
+        t = unittest.main(exit=False)
+        if t.result.errors:
+            sys.exit(1)
+        os.environ.pop('https_proxy',None)
+        os.environ.pop('HTTPS_PROXY',None)
+        print "Without proxy"
     unittest.main()
