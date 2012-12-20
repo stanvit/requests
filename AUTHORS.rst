@@ -114,3 +114,5 @@ Patches and Suggestions
 - Ian Cordasco <graffatcolmingov@gmail.com> @sigmavirus24
 - Rhys Elsmore
 - André Graf (dergraf)
+- Stephen Zhuang (everbird)
+- Martijn Pieters
