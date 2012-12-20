@@ -27,7 +27,7 @@ HTTPBIN_URL = os.environ.get('HTTPBIN_URL')
 
 def skip_if_proxied(wrapped,proto='http'):
     def f(*args, **kwargs):
-        if os.getenv('%s_proxy'%proto,os.getenv('%s_PROXY',None)):
+        if os.getenv('%s_proxy'%proto.lower(),os.getenv('%s_PROXY'%proto.upper(),None)):
             return
         return wrapped(*args,**kwargs)
     return f
