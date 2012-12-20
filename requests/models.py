@@ -31,10 +31,10 @@ from .exceptions import (
 from .utils import (
     get_encoding_from_headers, stream_untransfer, guess_filename, requote_uri,
     stream_decode_response_unicode, get_netrc_auth, get_environ_proxies,
-    to_key_val_list, DEFAULT_CA_BUNDLE_PATH, parse_header_links)
+    to_key_val_list, DEFAULT_CA_BUNDLE_PATH, parse_header_links, iter_slices)
 from .compat import (
     cookielib, urlparse, urlunparse, urljoin, urlsplit, urlencode, str, bytes,
-    StringIO, is_py2, chardet, json, builtin_str, numeric_types)
+    StringIO, is_py2, chardet, json, builtin_str)
 
 REDIRECT_STATI = (codes.moved, codes.found, codes.other, codes.temporary_moved)
 CONTENT_CHUNK_SIZE = 10 * 1024
@@ -110,6 +110,10 @@ class Request(object):
 
         # Dictionary mapping protocol to the URL of the proxy (e.g. {'http': 'foo.bar:3128'})
         self.proxies = dict(proxies or [])
+
+        for proxy_type,uri_ref in list(self.proxies.items()):
+            if not uri_ref:
+                del self.proxies[proxy_type]
 
         # If no proxies are given, allow configuration by environment variables
         # HTTP_PROXY and HTTPS_PROXY.
@@ -193,7 +197,7 @@ class Request(object):
                 response.status_code = getattr(resp, 'status', None)
 
                 # Make headers case-insensitive.
-                response.headers = CaseInsensitiveDict(getattr(resp, 'headers', None))
+                response.headers = CaseInsensitiveDict(getattr(resp, 'headers', {}))
 
                 # Set encoding.
                 response.encoding = get_encoding_from_headers(response.headers)
@@ -458,8 +462,10 @@ class Request(object):
 
     def register_hook(self, event, hook):
         """Properly register a hook."""
-
-        self.hooks[event].append(hook)
+        if isinstance(hook, (list, tuple, set)):
+            self.hooks[event].extend(hook)
+        else:
+            self.hooks[event].append(hook)
 
     def deregister_hook(self, event, hook):
         """Deregister a previously registered hook.
@@ -499,6 +505,21 @@ class Request(object):
                 datetime.now().isoformat(), self.method, url
             ))
 
+        # Use .netrc auth if none was provided.
+        if not self.auth and self.config.get('trust_env'):
+            self.auth = get_netrc_auth(url)
+
+        if self.auth:
+            if isinstance(self.auth, tuple) and len(self.auth) == 2:
+                # special-case basic HTTP auth
+                self.auth = HTTPBasicAuth(*self.auth)
+
+            # Allow auth to make its changes.
+            r = self.auth(self)
+
+            # Update self to reflect the auth changes.
+            self.__dict__.update(r.__dict__)
+
         # Nottin' on you.
         body = None
         content_type = None
@@ -518,21 +539,6 @@ class Request(object):
         # Add content-type if it wasn't explicitly provided.
         if (content_type) and (not 'content-type' in self.headers):
             self.headers['Content-Type'] = content_type
-
-        # Use .netrc auth if none was provided.
-        if not self.auth and self.config.get('trust_env'):
-            self.auth = get_netrc_auth(url)
-
-        if self.auth:
-            if isinstance(self.auth, tuple) and len(self.auth) == 2:
-                # special-case basic HTTP auth
-                self.auth = HTTPBasicAuth(*self.auth)
-
-            # Allow auth to make its changes.
-            r = self.auth(self)
-
-            # Update self to reflect the auth changes.
-            self.__dict__.update(r.__dict__)
 
         _p = urlparse(url)
         no_proxy = filter(lambda x: x.strip(), self.proxies.get('no', '').split(','))
@@ -723,9 +729,8 @@ class Response(object):
         length of each item returned as decoding can take place.
         """
         if self._content_consumed:
-            raise RuntimeError(
-                'The content for this response was already consumed'
-            )
+            # simulate reading small chunks of the content
+            return iter_slices(self._content, chunk_size)
 
         def generate():
             while 1:
@@ -816,9 +821,11 @@ class Response(object):
         # Decode unicode from given encoding.
         try:
             content = str(self.content, encoding, errors='replace')
-        except LookupError:
+        except (LookupError, TypeError):
             # A LookupError is raised if the encoding was not found which could
             # indicate a misspelling or similar mistake.
+            #
+            # A TypeError can be raised if encoding is None
             #
             # So we try blindly encoding.
             content = str(self.content, errors='replace')

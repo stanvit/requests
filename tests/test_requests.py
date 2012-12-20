@@ -751,6 +751,40 @@ class RequestsTestSuite(TestSetup, TestBaseMixin, unittest.TestCase):
             assert 'foo' in response.text
             assert 'bar' in response.text
 
+    def test_allow_list_of_hooks_to_register_hook(self):
+        """Issue 785: https://github.com/kennethreitz/requests/issues/785"""
+        def add_foo_header(args):
+            if not args.get('headers'):
+                args['headers'] = {}
+
+            args['headers'].update({
+                'X-Foo': 'foo'
+            })
+
+            return args
+
+        def add_bar_header(args):
+            if not args.get('headers'):
+                args['headers'] = {}
+
+            args['headers'].update({
+                'X-Bar': 'bar'
+            })
+
+            return args
+
+        def assert_hooks_are_callable(hooks):
+            for h in hooks['args']:
+                assert callable(h) is True
+
+        hooks = [add_foo_header, add_bar_header]
+        r = requests.models.Request()
+        r.register_hook('args', hooks)
+        assert_hooks_are_callable(r.hooks)
+
+        r = requests.models.Request(hooks={'args': hooks})
+        assert_hooks_are_callable(r.hooks)
+
     def test_session_persistent_cookies(self):
 
         s = requests.session()
@@ -933,6 +967,24 @@ class RequestsTestSuite(TestSetup, TestBaseMixin, unittest.TestCase):
         joined = lines[0] + '\n' + lines[1] + '\r\n' + lines[2]
         self.assertEqual(joined, quote)
 
+    def test_permissive_iter_content(self):
+        """Test that iter_content and iter_lines work even after the body has been fetched."""
+        r = get(httpbin('stream', '10'), prefetch=True)
+        assert r._content_consumed
+        # iter_lines should still work without crashing
+        self.assertEqual(len(list(r.iter_lines())), 10)
+
+        # iter_content should return a one-item iterator over the whole content
+        iter_content_list = list(r.iter_content(chunk_size=1))
+        self.assertTrue(all(len(item) == 1 for item in iter_content_list))
+        # when joined, it should be exactly the original content
+        self.assertEqual(bytes().join(iter_content_list), r.content)
+
+        # test different chunk sizes:
+        for chunk_size in range(2, 20):
+            self.assertEqual(bytes().join(r.iter_content(chunk_size=chunk_size)), r.content)
+
+
     # def test_safe_mode(self):
 
     #     safe = requests.session(config=dict(safe_mode=True))
@@ -1049,9 +1101,9 @@ class RequestsTestSuite(TestSetup, TestBaseMixin, unittest.TestCase):
     def test_prefetch_redirect_bug(self):
         """Test that prefetch persists across redirections."""
         res = get(httpbin('redirect/2'), prefetch=False)
-        # prefetch should persist across the redirect; if it doesn't,
-        # this attempt to iterate will crash because the content has already
-        # been read.
+        # prefetch should persist across the redirect;
+        # the content should not have been consumed
+        self.assertFalse(res._content_consumed)
         first_line = next(res.iter_lines())
         self.assertTrue(first_line.strip().decode('utf-8').startswith('{'))
 
@@ -1059,7 +1111,8 @@ class RequestsTestSuite(TestSetup, TestBaseMixin, unittest.TestCase):
         """Test that prefetch can be overridden as a kwarg to `send`."""
         req = requests.get(httpbin('get'), return_response=False)
         req.send(prefetch=False)
-        # content should not have been prefetched, and iter_lines should succeed
+        # content should not have been prefetched
+        self.assertFalse(req.response._content_consumed)
         first_line = next(req.response.iter_lines())
         self.assertTrue(first_line.strip().decode('utf-8').startswith('{'))
 
